@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="shortcut icon" href="http://localhost/" />
+  <title>Document</title>
+  <script src="iobRestApiLongPoll.js"></script>
+  <style>
+    span[class^='payload-'] {
+      border: 1px solid rgba(0,0,0,0.1);
+      background-color: rgba(255,255,255,0.8);
+      font-weight: bold;
+      line-height: 1.9rem;
+      padding: 0.13rem;
+    }
+    span.payload-val {
+      color: forestgreen;
+    }
+    span.payload-id {
+      color: blue;
+      font-weight: normal;
+    }
+
+    body {
+      font-size: 150%;
+      font-family: 'Arial';
+    }
+
+    #control, #debug {
+      background-color: beige;
+      height: 40px;
+      margin: 5px;
+      padding: 5px;
+      padding-top: auto;
+      padding-bottom: auto;
+    }
+
+    button {
+      width: 120px;
+      height: 40px;
+      background-color: rgb(98, 162, 241);
+      font-size: 80%;
+    }
+    button.btn-set {
+      background-color: darkgoldenrod;
+    }
+
+    #debug span {
+      margin-right: 1.5rem;
+    }
+    #debug span span {
+      background-color: lightblue;
+    }
+
+    .ts {
+      font-size:small;
+      background-color:lightgray;
+      padding: 3px;
+      margin: 2px;
+    }
+
+    #payload {
+      background-color: lightcyan;
+      width: 100%;
+      min-height: 40px;
+      font-size: smaller;
+      font-family:'Courier New', Courier, monospace;
+      word-wrap: break-word;
+      overflow: auto;
+      margin-top: 5px;
+    }
+    .values {
+      display: inline;
+      font-size: 90%;
+      margin-right: 1rem;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="control">
+    <button id="btnStopPolling" type="button" onclick="restapi.stopPolling()" disabled>Stop</button>
+    <button id="btnStartPolling" type="button" onclick="restapi.startPolling()" disabled>Start</button>
+
+    DEMOVALUES:
+
+    <div class="values">
+      state=<span id="demo-state">false</span>
+      <button class="button btn-set" id="btnSetValue" onclick="clickSetState(event)">toggle</button>
+    </div>
+
+    <div class="values">
+      value=<span id="demo-value">???</span>
+    </div>
+  </div>
+
+  <div id="debug">
+    <span>Polling:</span>
+    <span>active=<span id="pollingState">true</span></span>
+    <span>aborted=<span id="pollAborted">true</span></span>
+  </div>
+
+  <div id="msgblock">
+    <span class="ts">last poll event: <span id="pollevent">0</span></span>
+    <br/>
+
+    last response:
+    <div id="payload">
+      until now, no data received
+    </div>
+  </div>
+
+  <script>
+    /*
+      utilty functions
+      --------------------------------------------------------
+    */
+
+    function ts2datetime(ts, withDate=true) {
+      const o = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      if (withDate) {
+        o.month = 'short'; o.day= '2-digit';
+        return (new Date(ts)).toLocaleDateString([], o);
+      }
+      return (new Date(ts)).toLocaleTimeString([], o);
+    }
+
+    function span(value, className) {
+      return `<span class='${className}'>${value}</span>`;
+    }
+
+    // shows some more internal data for debugging purposes
+    function showRAstates() {
+      try {
+        document.getElementById("pollingState").innerHTML   = restapi.isPolling ? "True" : "False";
+        document.getElementById("pollAborted").innerHTML    = restapi.getAborted() ? "True" : "False";
+      } catch (error) {
+      }
+    }
+
+    /*
+      event callback functions
+      --------------------------------------------------------
+    */
+
+    /*
+      Thrown if the polling is stopped or started.
+    */
+    function RA_PollstateChange(state) {
+      showRAstates();
+      // disable the buttons, depending on the polling state
+      document.getElementById("btnStopPolling").disabled = !state;
+      document.getElementById("btnStartPolling").disabled = state;
+    }
+
+    /*
+      Thrown if long polling time has elapsed without receiving a message.
+      This event may be useful if a sign of life is desired.
+    */
+    function RA_EmptyPoll(ts) {
+      showRAstates();
+      // shows the current date and time
+      document.getElementById("pollevent").textContent = ts2datetime(ts);
+    }
+
+    /*
+      Thrown if an error occurred. Most often, this happens when the REST API adapter is not available.
+      The parameter is the error object.
+    */
+    function RA_Error(error) {
+      showRAstates();
+      // shows the error instead of the last received message
+      document.getElementById("payload").style.backgroundColor = 'lightsalmon';
+      document.getElementById("payload").textContent = error?.toString()
+      /*
+        If a value greater than zero is returned, that value is the delay in milliseconds before the next
+        attempt to restart the polling.
+        A value of zero means that the polling will stop until the next call to restapi.StartPolling().
+        No return value, return values other than numbers or values below zero wait the defined polling
+        time until the next attempt to restart the polling.
+        This allows to specify when the next attempt to restart polling is done, depending on the error.
+        Normally, errors occurre because the connection to the REST-API adapter has been lost. However,
+        this connection is automatically activated again after some time, so that it makes sense to retry
+        starting polling after a few seconds.
+      */
+      // return 10000;
+    }
+
+    /*
+      Thrown if an message occurred. The message payload contains a JSON object that looks for example
+      like this:
+      {
+        "id":"0_userdata.0.example_state",
+        "state":{"val":"false","ack":false,"ts":"1676807809848(12:56:49)","q":0,"from":"system.adapter.rest-api.0",
+                 "user":"system.user.admin","lc":"1676807809848(12:56:49)"},
+        "iddata":{"elem":"{[NODE]:{id:demo-state}}"}
+      }
+
+      "id"      is id of the datapoint you subscribed to and that triggers the event, because the value an
+                this datapoint has changed.
+      "state"   cantains the new value and some other properties.
+      "iddata"  is the object you gave to the subscribe function.
+    */
+    function RA_PollMessage(payload) {
+      showRAstates();
+      document.getElementById("payload").style.backgroundColor = 'lightcyan';
+      document.getElementById("payload").innerHTML = JSON.stringify(
+        payload,
+        (_key, value) => {
+          switch (_key) {
+            case "elem":  return `{[NODE]:{id:${value.id}}}`;
+            case "id":    return span(value, 'payload-id');
+            case "val":   return span(value, 'payload-val');
+            case "ts":
+            case "lc":    return `${value}(${ts2datetime(value, false)})`;
+            default:      return value;
+          }
+      });
+
+      if (payload?.state?.ts)
+        document.getElementById("pollevent").textContent = ts2datetime(payload.state.ts);
+
+      if (payload?.iddata?.elem != undefined)
+        payload.iddata.elem.textContent = payload.state.val
+    }
+
+    /*
+      using the restapi class from the linked javascript
+      --------------------------------------------------------
+    */
+
+    // when opened with my phone, it only worked for me with the IP address, not the hostname!
+    const URL       = "http://192.168.2.135:8093/";
+    // the session-id must be unique for every connection
+    const sessionId = "rad_0245786";
+    // the time in ms a long poll will wait for a message from rest-api adapter
+    const pollTime  = 10 * 60000;
+    // the time in ms the restapi class will wait to restart long polling after an error or the connection to rest-api adapter is lost
+    const retryTime = 5000;
+
+    // create the instance
+    const restapi = new C_RestApi(URL, sessionId, "admin", "", 60000*10, 5000);
+    // assign the event callbacks
+    restapi.onError           = RA_Error          // error occurred
+    restapi.onPollMsg         = RA_PollMessage    // datapoint value changed
+    restapi.onEmptyPoll       = RA_EmptyPoll      // the polltime elapsed without a message. (perhaps useful for something)
+    restapi.onPollstateChange = RA_PollstateChange; // polling has stopped or started
+
+    /*
+      The ids of the data points to subscribe to.
+      In this case the extra.elem is used to store the html element that corresponds to the data
+      of the id. See RA_PollMessage() event function.
+    */
+    const datapoints = [
+      {id:"0_userdata.0.example_data", extra:{elem: document.getElementById("demo-value")}},
+      {id:"0_userdata.0.example_state", extra:{elem: document.getElementById("demo-state")}},
+    ]
+
+    // subscribe to the defined data points.
+    datapoints.forEach(dp => {
+      restapi.subscribeState(dp.id, dp.extra)
+    })
+
+    // restapi.subscribePattern("_userdata.0.#", {})  // subscribe to a pattern of datapoints. ### not testet jet
+
+    delete datapoints;    // This array is not used anymore
+
+    restapi.startPolling();   // start the long polling
+
+    /*
+      functions used by the html
+      --------------------------------------------------------
+    */
+
+    function clickSetState(ev) {
+      restapi.toggleState("0_userdata.0.example_state");
+    }
+
+/* ### perhaps usefull to start/stop and unsubscribe all. Not used in this version
+    function handleNetworkChange() {
+      if (navigator.onLine) {
+        // Browser is online
+        // longPoll();
+        console.log("Browser is online")
+      } else {
+        // Browser is offline
+        // stopLongPoll();
+        console.log("Browser is OFFLINE")
+      }
+    }
+
+    window.addEventListener('online', handleNetworkChange);
+    window.addEventListener('offline', handleNetworkChange);
+ */
+  </script>
+</body>
+</html>
