@@ -46,7 +46,7 @@ Unter den [Beispielen](https://github.com/ioBroker/ioBroker.rest-api/tree/master
 - keine zusätzlichen Variablen außer der Instanz der rest-api Klasse und den Ereignis Funktionen im html Dokument nötig.
 - beim Abonnieren kann ein zusätzliches Objekt mitgegeben werden, das im Ereignis gelesen werden kann.
 - Abonnieren von Datenpunkten zu shelly Geräten ist möglich, da beim Senden in der URL alle '#'-Zeichen der id durch '%23' ersetzt werden.
-- Die *session.id* wird im constructor gesetzt und bleibt so bei jedem Aufruf der html Seite gleich.
+- Die *session-id* wird im constructor gesetzt und bleibt so bei jedem Aufruf der html Seite gleich.
 
   Da ich mit vsCode und der 'Live Server' Erweiterung arbeite, lud die Erweiterung bei jedem Speichern die Seite im browser neu und damit wurde auch jedes Mal eine neue session-id generiert.
 
