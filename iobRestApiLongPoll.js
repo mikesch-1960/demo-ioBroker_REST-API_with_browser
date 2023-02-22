@@ -8,41 +8,48 @@ class C_RestApi {
   #authorization    = {user:"", password:""};
 
   // ----- values needed for the long polling service
-    // milliseconds that a polling connection waits
-  #pollPeriod       = 60000;
+    // seconds that a polling connection waits
+  #pollPeriod       = 60;
     // true for the first poll, where the long poll interval must be send to REST-API
   #firstPoll        = true;
-    // true while long polling is active
-  #isPolling        = false;
     // while polling, this stores the defined subscriptions
   #subscriptions    = {};
     // object, that can abort a fetch operation
   #abortCtrl        = null;
-    // delay for retrying to reactivate polling, after an error occurred
-  #retryPollDelay   = 5000;
+    // delay in seconds for retrying to reactivate polling, after an error occurred
+  #retryPollDelay   = 5;
 
   // ----- callbacks
     // parameter: true/false; returns: void
   onPollstateChange = null; // called, if polling status changed
     // parameter: the error object; returns: void
   onError           = null; // called, if an error occurred while polling
-    // parameter: none; returns: void or milliseconds to wait for the next polling
+    // parameter: none; returns: void or seconds to wait for the next polling
   onEmptyPoll       = null; // called, if no messages were received within the polling interval
     // parameter: JSON object; returns: void
   onPollMsg         = null; // called, if a message from a subscribed datapoint is received
 
+  #enumState = Object.freeze({
+    polling:  1,
+    paused:   2,
+    error:    3,
+    offline:  4,
+    retry:    5
+  })
+  #state           = this.#enumState.offline;
 
   constructor(baseURL, sessionId, user, password, pollPeriod, retryPollDelay) {
     this.#baseURL         = baseURL + (baseURL[baseURL.length - 1] !== '/' ? "/" : "") + "v1/";
     this.#sessionId       = sessionId || Date.now() + '_' + Math.round(Math.random() * 10000);
     this.#authorization   = {user: user || "", password: password || ""};
-    this.#pollPeriod      = pollPeriod || 30000;
-    this.#retryPollDelay  = retryPollDelay || 5000;
+    this.#pollPeriod      = pollPeriod || 30;
+    this.#retryPollDelay  = retryPollDelay || 5;
 
     this.#firstPoll       = true;
-    this.#isPolling       = false;
     this.#subscriptions   = {};
     this.#abortCtrl       = null;
+
+    this.#setPollstate(this.#enumState.offline);
   }   // constructor()
 
   startPolling() {
@@ -154,16 +161,24 @@ class C_RestApi {
     return this.#sessionId;
   }
 
-  getPollPeriod() {
+  getPollPeriodSeconds() {
     return this.#pollPeriod;
   }
 
-  getAborted() {
+  getPollAborted() {
     return this.#abortCtrl && this.#abortCtrl.signal.aborted;
   }
 
   isPolling() {
-    return this.#isPolling;
+    return this.#state == this.#enumState.polling;
+  }
+
+  getPollState() {
+    return this.#state;
+  }
+
+  getPollStateString() {
+    return Object.keys(this.#enumState)[Object.values(this.#enumState).indexOf(this.#state)];
   }
 
   getSubscriptionData(id) {
@@ -171,6 +186,10 @@ class C_RestApi {
   }
 
   // ------------  private methods --------------------------------
+
+  #encodeId(id) {
+    return id.replaceAll('#', '%23');
+  }
 
   #subscribe(id, idObject, kind) {
     // console.debug(`REST-API: subscribe ${kind} to ${id}`)
@@ -180,8 +199,8 @@ class C_RestApi {
       this.#subscriptions[id] = {idtype: kind, iddata: idObject};
     }
 
-    if (this.#isPolling) {
-      const xid = kind==="states" ? id : id.replaceAll('#', '%23');  //### to a function; for shelly datapoints the # must be masked
+    if (this.isPolling()) {
+      const xid = kind==="states" ? id : this.#encodeId(id);
       fetch(`${this.#baseURL}${kind}/${xid}/subscribe?sid=${this.#sessionId}&method=polling`,
         { signal: this.#abortCtrl.signal, headers: this.#getHeaders() }
       )
@@ -193,7 +212,7 @@ class C_RestApi {
         }
       )
       .catch(error => console.error(`REST-API: Cannot subscribe ${kind}: ${error}`));
-    }   // if(isPolling)...
+    }   // if (isPolling())...
   }   //#subscribe()
 
   #resubscribeAll() {
@@ -205,10 +224,9 @@ class C_RestApi {
   }   // #resubscribeAll()
 
   #setPollstate(state) {
-    if (this.#isPolling !== state) {
-      this.#isPolling = state;
-      this.onPollstateChange && this.onPollstateChange(state);
-    }
+    this.#state = state;
+    console.debug("setPollstate: " + this.#state + " = " + this.getPollStateString());
+    this.onPollstateChange && this.onPollstateChange();
   }   // #setPollstate()
 
   #getHeaders(jsonType=false) {
@@ -233,7 +251,7 @@ class C_RestApi {
     if (this.#abortCtrl && this.#abortCtrl.signal.aborted)
       return false;
 
-    fetch(`${this.#baseURL}polling?sid=${this.#sessionId}${this.#firstPoll ? '&connect&timeout='+this.#pollPeriod : ''}`,
+    fetch(`${this.#baseURL}polling?sid=${this.#sessionId}${this.#firstPoll?'&connect&timeout='+(this.#pollPeriod*1000):''}`,
       { signal: this.#abortCtrl.signal, headers: this.#getHeaders() }
     )
     .then(response => {
@@ -251,12 +269,12 @@ class C_RestApi {
 
       if (data === '_') { // seems to mean that initializing polling was successful
         // console.debug(`REST-API: Connect first time response. first=${this.#firstPoll}`)
-        this.#setPollstate(true);
+        this.#setPollstate(this.#enumState.polling);
         this.#resubscribeAll();
         this.#firstPoll = false;
       } else
       if (data === '') {  // seems to mean that the polling time has elapsed without receiving a message
-        // console.debug(`REST-API: No response within the long poll time of ${this.#pollPeriod}ms`)
+        // console.debug(`REST-API: No response within the long poll time of ${this.#pollPeriod}s`)
         this.onEmptyPoll && this.onEmptyPoll(new Date().getTime());
       } else {      // all other responses should be in JSON as text
         try {
@@ -268,7 +286,7 @@ class C_RestApi {
 
         if (data?.disconnect === true) {    // seems to mean that the connection to the REST-API has been lost
           console.info(`REST-API: connection lost`);
-          this.#setPollstate(false);
+          this.#setPollstate(this.#enumState.offline);
           throw new Error('connection lost');
         }
 
@@ -283,11 +301,10 @@ class C_RestApi {
       this.#lngPoll(); // Start the long poll again
     })
     .catch(error => {
-      this.#setPollstate(false);
-
       // Handle abort error
       if (error?.name === 'AbortError') {
         console.warn(`REST-API: long polling aborted!`)
+        this.#setPollstate(this.#enumState.paused);
       } else {
         // Handle other errors
         console.error('REST-API: ', error?.toString());
@@ -298,12 +315,31 @@ class C_RestApi {
         let reconnTime = this.#retryPollDelay;
         if (this.onError) {
           reconnTime = this.onError(error);
+          /*
+            If reconnTime is greater than zero, that value is the delay in seconds before the next attempt
+            to restart the polling.
+
+            If reconnTime is zero, the polling will stop until the next call to restapi.StartPolling().
+
+            All other values use the default wait time before the next attempt to restart the polling is done.
+            This allows to specify when the next attempt to restart polling is done, depending on the error.
+            Normally, errors occurre because the connection to the REST-API adapter has been lost. However,
+            this connection is automatically activated again after some time, so that it makes sense to retry
+            starting polling after a few seconds.
+          */
           if (!reconnTime || reconnTime < 0)
             reconnTime = this.#retryPollDelay;
         }
-        console.info(`REST-API: Try to restart polling after ${reconnTime} milliseconds...`);
 
-        setTimeout(() => { this.startPolling() }, reconnTime);  // wait and then try to long poll again
+        if (reconnTime === 0) {   // stop polling until reconnect the next call to restapi.StartPolling()
+          console.info(`REST-API: polling is stopped...`);
+          this.#setPollstate(this.#enumState.error);
+        }
+        else {
+          console.info(`REST-API: Try to restart polling after ${reconnTime} seconds...`);
+          this.#setPollstate(this.#enumState.retry);
+          setTimeout(() => { this.startPolling() }, reconnTime*1000);  // wait and then try to long poll again
+        }
       }   // if (not aborted)
     }); // catch(error)
   }   // #lngPoll()

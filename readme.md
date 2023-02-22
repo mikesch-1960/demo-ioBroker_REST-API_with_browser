@@ -33,13 +33,13 @@ Unter den [Beispielen](https://github.com/ioBroker/ioBroker.rest-api/tree/master
 - beim Abonnieren von Datenpunkten zu shelly Geräten wird die gesendete URL nicht ganz erkannt, da diese Datenpunkte '#'-Zeichen im Namen haben.
 - die html Seite ist leer.
 
-# Das Projekt
-
-## Von mir benutzte Programme
+## Zum entwickeln benutzte Programme
 - Visual Studio Code. Erweiterungen:
   - Live Server
   - weitere, die das Bearbeiten von html, css und js erleichtern
 - Firefox (light mode)
+
+# Das Projekt
 
 ## In meiner Version implementiert:
 - eine einzige Klasse die nicht nur das *long polling* kapselt, sondern in der auch die anderen (im Moment nur die von mir benötigten) Aufrufe der rest-api enthalten sind.

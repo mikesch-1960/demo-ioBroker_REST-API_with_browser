@@ -98,8 +98,9 @@
 
   <div id="debug">
     <span>Polling:</span>
-    <span>active=<span id="pollingState">true</span></span>
+    <span>active=<span id="pollActive">true</span></span>
     <span>aborted=<span id="pollAborted">true</span></span>
+    <span>state=<span id="pollState">true</span></span>
   </div>
 
   <div id="msgblock">
@@ -134,8 +135,6 @@
     // shows some more internal data for debugging purposes
     function showRAstates() {
       try {
-        document.getElementById("pollingState").innerHTML   = restapi.isPolling ? "True" : "False";
-        document.getElementById("pollAborted").innerHTML    = restapi.getAborted() ? "True" : "False";
       } catch (error) {
       }
     }
@@ -148,18 +147,23 @@
     /*
       Thrown if the polling is stopped or started.
     */
-    function RA_PollstateChange(state) {
+    function LP_StateChange() {
       showRAstates();
       // disable the buttons, depending on the polling state
-      document.getElementById("btnStopPolling").disabled = !state;
-      document.getElementById("btnStartPolling").disabled = state;
+      document.getElementById("btnStopPolling").disabled  = !restapi.isPolling();
+      document.getElementById("btnSetValue").disabled     = !restapi.isPolling();
+      document.getElementById("btnStartPolling").disabled = restapi.isPolling();
+
+      document.getElementById("pollActive").innerHTML     = restapi.isPolling() ? "True" : "False";
+      document.getElementById("pollAborted").innerHTML    = restapi.getPollAborted() ? "True" : "False";
+      document.getElementById("pollState").innerHTML      = restapi.getPollStateString();
     }
 
     /*
       Thrown if long polling time has elapsed without receiving a message.
       This event may be useful if a sign of life is desired.
     */
-    function RA_EmptyPoll(ts) {
+    function LP_EmptyPoll(ts) {
       showRAstates();
       // shows the current date and time
       document.getElementById("pollevent").textContent = ts2datetime(ts);
@@ -169,13 +173,13 @@
       Thrown if an error occurred. Most often, this happens when the REST API adapter is not available.
       The parameter is the error object.
     */
-    function RA_Error(error) {
+    function LP_Error(error) {
       showRAstates();
       // shows the error instead of the last received message
       document.getElementById("payload").style.backgroundColor = 'lightsalmon';
       document.getElementById("payload").textContent = error?.toString()
       /*
-        If a value greater than zero is returned, that value is the delay in milliseconds before the next
+        If a value greater than zero is returned, that value is the delay in seconds before the next
         attempt to restart the polling.
         A value of zero means that the polling will stop until the next call to restapi.StartPolling().
         No return value, return values other than numbers or values below zero wait the defined polling
@@ -185,7 +189,7 @@
         this connection is automatically activated again after some time, so that it makes sense to retry
         starting polling after a few seconds.
       */
-      // return 10000;
+      // return 10; // next attempt to restart polling in 10 seconds
     }
 
     /*
@@ -203,7 +207,7 @@
       "state"   cantains the new value and some other properties.
       "iddata"  is the object you gave to the subscribe function.
     */
-    function RA_PollMessage(payload) {
+    function LP_Message(payload) {
       showRAstates();
       document.getElementById("payload").style.backgroundColor = 'lightcyan';
       document.getElementById("payload").innerHTML = JSON.stringify(
@@ -234,19 +238,19 @@
     // when opened with my phone, it only worked for me with the IP address, not the hostname!
     const URL       = "http://192.168.2.135:8093/";
     // the session-id must be unique for every connection
-    const sessionId = "rad_0245786";
-    // the time in ms a long poll will wait for a message from rest-api adapter
-    const pollTime  = 10 * 60000;
-    // the time in ms the restapi class will wait to restart long polling after an error or the connection to rest-api adapter is lost
-    const retryTime = 5000;
+    const SessionId = "rad_0245786";
+    // the time in seconds a long poll will wait for a message from rest-api adapter
+    const PollTime  = 10 * 60;
+    // the time in seconds the restapi class will wait to restart long polling after an error or the connection to rest-api adapter is lost
+    const RetryTime = 5;
 
     // create the instance
-    const restapi = new C_RestApi(URL, sessionId, "admin", "", 60000*10, 5000);
+    const restapi = new C_RestApi(URL, SessionId, "admin", "", PollTime, RetryTime);
     // assign the event callbacks
-    restapi.onError           = RA_Error          // error occurred
-    restapi.onPollMsg         = RA_PollMessage    // datapoint value changed
-    restapi.onEmptyPoll       = RA_EmptyPoll      // the polltime elapsed without a message. (perhaps useful for something)
-    restapi.onPollstateChange = RA_PollstateChange; // polling has stopped or started
+    restapi.onError           = LP_Error          // error occurred
+    restapi.onPollMsg         = LP_Message    // datapoint value changed
+    restapi.onEmptyPoll       = LP_EmptyPoll      // the polltime elapsed without a message. (perhaps useful for something)
+    restapi.onPollstateChange = LP_StateChange; // polling has stopped or started
 
     /*
       The ids of the data points to subscribe to.
@@ -260,7 +264,7 @@
 
     // subscribe to the defined data points.
     datapoints.forEach(dp => {
-      restapi.subscribeState(dp.id, dp.extra)
+      restapi.subscribeState(dp.id, dp.extra);
     })
 
     // restapi.subscribePattern("_userdata.0.#", {})  // subscribe to a pattern of datapoints. ### not testet jet
