@@ -17,7 +17,9 @@ class C_RestApi {
     // object, that can abort a fetch operation
   #abortCtrl        = null;
     // delay in seconds for retrying to reactivate polling, after an error occurred
-  #retryPollDelay   = 5;
+  #pollRetryDelay   = 5;
+  // the setTimeout
+  #setTOid          = null;
 
   // ----- callbacks
     // parameter: true/false; returns: void
@@ -28,28 +30,26 @@ class C_RestApi {
   onEmptyPoll       = null; // called, if no messages were received within the polling interval
     // parameter: JSON object; returns: void
   onPollMsg         = null; // called, if a message from a subscribed datapoint is received
+    // describing the current state of the polling
+  #pollstate           = -1;  // default value must be different from the possible states!
 
-  #enumState = Object.freeze({
-    polling:  1,
-    paused:   2,
-    error:    3,
-    offline:  4,
-    retry:    5
+  pollStates = Object.freeze({
+    polling:      1,
+    paused:       2,
+    offline:      3,
+    expectRetry:  4
   })
-  #state           = this.#enumState.offline;
 
   constructor(baseURL, sessionId, user, password, pollPeriod, retryPollDelay) {
     this.#baseURL         = baseURL + (baseURL[baseURL.length - 1] !== '/' ? "/" : "") + "v1/";
     this.#sessionId       = sessionId || Date.now() + '_' + Math.round(Math.random() * 10000);
     this.#authorization   = {user: user || "", password: password || ""};
     this.#pollPeriod      = pollPeriod || 30;
-    this.#retryPollDelay  = retryPollDelay || 5;
+    this.#pollRetryDelay  = retryPollDelay || 5;
 
     this.#firstPoll       = true;
     this.#subscriptions   = {};
     this.#abortCtrl       = null;
-
-    this.#setPollstate(this.#enumState.offline);
   }   // constructor()
 
   startPolling() {
@@ -60,13 +60,19 @@ class C_RestApi {
       this.#abortCtrl = new AbortController();
     }
     this.#firstPoll   = true;
+
+    this.#setTOid && clearTimeout(this.#setTOid);
+    this.#setPollstate(this.pollStates.offline);
+
     this.#lngPoll();
   }
 
   stopPolling() {
     console.info("REST-API: stopp polling...");
+    this.#setTOid && clearTimeout(this.#setTOid);
     // this.#subscriptions stay defined for resubscribe them when restart the polling
     this.#abortCtrl.abort();
+    this.#setPollstate(this.pollStates.paused);
   }
 
   /*
@@ -161,28 +167,33 @@ class C_RestApi {
     return this.#sessionId;
   }
 
-  getPollPeriodSeconds() {
-    return this.#pollPeriod;
+  //###
+  // getPollPeriodSeconds() {
+  //   return this.#pollPeriod;
+  // }
+
+  polling() {
+    return this.#pollstate === this.pollStates.polling;
   }
 
-  getPollAborted() {
-    return this.#abortCtrl && this.#abortCtrl.signal.aborted;
+  paused() {
+    return this.#pollstate === this.pollStates.paused;
   }
 
-  isPolling() {
-    return this.#state == this.#enumState.polling;
+  offline() {
+    return this.#pollstate === this.pollStates.offline;
+  }
+
+  expectRetry() {
+    return this.#pollstate === this.pollStates.expectRetry;
   }
 
   getPollState() {
-    return this.#state;
-  }
-
-  getPollStateString() {
-    return Object.keys(this.#enumState)[Object.values(this.#enumState).indexOf(this.#state)];
+    return Object.keys(this.pollStates)[Object.values(this.pollStates).indexOf(this.#pollstate)];
   }
 
   getSubscriptionData(id) {
-    return this.#subscriptions && this.#subscriptions[id] && this.#subscriptions[id].isdata;
+    return (this.#subscriptions && this.#subscriptions[id] && this.#subscriptions[id].isdata) || {};
   }
 
   // ------------  private methods --------------------------------
@@ -199,7 +210,7 @@ class C_RestApi {
       this.#subscriptions[id] = {idtype: kind, iddata: idObject};
     }
 
-    if (this.isPolling()) {
+    if (this.polling()) {
       const xid = kind==="states" ? id : this.#encodeId(id);
       fetch(`${this.#baseURL}${kind}/${xid}/subscribe?sid=${this.#sessionId}&method=polling`,
         { signal: this.#abortCtrl.signal, headers: this.#getHeaders() }
@@ -212,7 +223,7 @@ class C_RestApi {
         }
       )
       .catch(error => console.error(`REST-API: Cannot subscribe ${kind}: ${error}`));
-    }   // if (isPolling())...
+    }   // if (polling())...
   }   //#subscribe()
 
   #resubscribeAll() {
@@ -223,9 +234,11 @@ class C_RestApi {
     }
   }   // #resubscribeAll()
 
-  #setPollstate(state) {
-    this.#state = state;
-    console.debug("setPollstate: " + this.#state + " = " + this.getPollStateString());
+  #setPollstate(pollstate) {
+    if (this.#pollstate === pollstate)
+      return;
+
+    this.#pollstate = pollstate;
     this.onPollstateChange && this.onPollstateChange();
   }   // #setPollstate()
 
@@ -248,6 +261,8 @@ class C_RestApi {
   }   // #getHeaders()
 
   #lngPoll() {
+    this.#setTOid && clearTimeout(this.#setTOid);
+
     if (this.#abortCtrl && this.#abortCtrl.signal.aborted)
       return false;
 
@@ -269,13 +284,13 @@ class C_RestApi {
 
       if (data === '_') { // seems to mean that initializing polling was successful
         // console.debug(`REST-API: Connect first time response. first=${this.#firstPoll}`)
-        this.#setPollstate(this.#enumState.polling);
+        this.#setPollstate(this.pollStates.polling);
         this.#resubscribeAll();
         this.#firstPoll = false;
       } else
       if (data === '') {  // seems to mean that the polling time has elapsed without receiving a message
         // console.debug(`REST-API: No response within the long poll time of ${this.#pollPeriod}s`)
-        this.onEmptyPoll && this.onEmptyPoll(new Date().getTime());
+        this.onEmptyPoll && this.onEmptyPoll();
       } else {      // all other responses should be in JSON as text
         try {
           console.debug(`REST-API: '${data}'`);
@@ -286,7 +301,6 @@ class C_RestApi {
 
         if (data?.disconnect === true) {    // seems to mean that the connection to the REST-API has been lost
           console.info(`REST-API: connection lost`);
-          this.#setPollstate(this.#enumState.offline);
           throw new Error('connection lost');
         }
 
@@ -304,7 +318,7 @@ class C_RestApi {
       // Handle abort error
       if (error?.name === 'AbortError') {
         console.warn(`REST-API: long polling aborted!`)
-        this.#setPollstate(this.#enumState.paused);
+        this.#setPollstate(this.pollStates.paused);
       } else {
         // Handle other errors
         console.error('REST-API: ', error?.toString());
@@ -312,9 +326,9 @@ class C_RestApi {
       }   // if (not abort error)
 
       if (!this.#abortCtrl.signal.aborted) {
-        let reconnTime = this.#retryPollDelay;
+        let retryTime = undefined;
         if (this.onError) {
-          reconnTime = this.onError(error);
+          retryTime = this.onError(error);
           /*
             If reconnTime is greater than zero, that value is the delay in seconds before the next attempt
             to restart the polling.
@@ -327,18 +341,19 @@ class C_RestApi {
             this connection is automatically activated again after some time, so that it makes sense to retry
             starting polling after a few seconds.
           */
-          if (!reconnTime || reconnTime < 0)
-            reconnTime = this.#retryPollDelay;
         }
 
-        if (reconnTime === 0) {   // stop polling until reconnect the next call to restapi.StartPolling()
+        if (retryTime === undefined || retryTime < 0)
+          retryTime = this.#pollRetryDelay;
+
+        if (retryTime === 0) {   // stop polling until reconnect the next call to restapi.StartPolling()
           console.info(`REST-API: polling is stopped...`);
-          this.#setPollstate(this.#enumState.error);
+          this.#setPollstate(this.pollStates.offline);
         }
         else {
-          console.info(`REST-API: Try to restart polling after ${reconnTime} seconds...`);
-          this.#setPollstate(this.#enumState.retry);
-          setTimeout(() => { this.startPolling() }, reconnTime*1000);  // wait and then try to long poll again
+          console.info(`REST-API: Try to restart polling after ${retryTime} seconds...`);
+          this.#setTOid = setTimeout(() => { this.startPolling() }, retryTime*1000);  // wait and then try to long poll again
+          this.#setPollstate(this.pollStates.expectRetry, retryTime);
         }
       }   // if (not aborted)
     }); // catch(error)

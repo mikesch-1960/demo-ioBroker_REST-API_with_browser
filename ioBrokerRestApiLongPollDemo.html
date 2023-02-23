@@ -30,7 +30,7 @@
 
     #control, #debug {
       background-color: beige;
-      height: 40px;
+      height: auto;
       margin: 5px;
       padding: 5px;
       padding-top: auto;
@@ -38,13 +38,20 @@
     }
 
     button {
-      width: 120px;
-      height: 40px;
       background-color: rgb(98, 162, 241);
-      font-size: 80%;
+      font-size: 130%;
+      margin-right: 0.4rem;
     }
-    button.btn-set {
+    button.toggle {
+      padding: .4rem;
       background-color: darkgoldenrod;
+      font-size: 130%;
+    }
+
+    .values {
+      display: inline;
+      font-size: 90%;
+      margin: auto 1rem;
     }
 
     #debug span {
@@ -71,24 +78,19 @@
       overflow: auto;
       margin-top: 5px;
     }
-    .values {
-      display: inline;
-      font-size: 90%;
-      margin-right: 1rem;
-    }
-
   </style>
 </head>
 <body>
   <div id="control">
-    <button id="btnStopPolling" type="button" onclick="restapi.stopPolling()" disabled>Stop</button>
-    <button id="btnStartPolling" type="button" onclick="restapi.startPolling()" disabled>Start</button>
+    <button id="btnStopPolling" type="button" onclick="restapi.stopPolling()" disabled>⏸</button>
+    <button id="btnStartPolling" type="button" onclick="restapi.startPolling()" disabled>▶</button>
 
     DEMOVALUES:
 
     <div class="values">
-      state=<span id="demo-state">false</span>
-      <button class="button btn-set" id="btnSetValue" onclick="clickSetState(event)">toggle</button>
+      state=
+      <span id="demo-state">???</span>
+      <button class="button toggle" id="btnToggleVal" onclick="clickSetState(event)">⇋</button>
     </div>
 
     <div class="values">
@@ -98,13 +100,13 @@
 
   <div id="debug">
     <span>Polling:</span>
-    <span>active=<span id="pollActive">true</span></span>
-    <span>aborted=<span id="pollAborted">true</span></span>
-    <span>state=<span id="pollState">true</span></span>
+    <span>active=<span id="pollActive">false</span></span>
+    <span>paused=<span id="pollPaused">false</span></span>
+    <span>state=<span id="pollState">???</span></span>
   </div>
 
   <div id="msgblock">
-    <span class="ts">last poll event: <span id="pollevent">0</span></span>
+    <span class="ts">last empty poll: <span id="pollevent">0</span></span>
     <br/>
 
     last response:
@@ -119,6 +121,7 @@
       --------------------------------------------------------
     */
 
+    // converts a timestamp to a human readable format
     function ts2datetime(ts, withDate=true) {
       const o = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
       if (withDate) {
@@ -128,15 +131,9 @@
       return (new Date(ts)).toLocaleTimeString([], o);
     }
 
+    // wraps value into span with specified class
     function span(value, className) {
       return `<span class='${className}'>${value}</span>`;
-    }
-
-    // shows some more internal data for debugging purposes
-    function showRAstates() {
-      try {
-      } catch (error) {
-      }
     }
 
     /*
@@ -148,25 +145,25 @@
       Thrown if the polling is stopped or started.
     */
     function LP_StateChange() {
-      showRAstates();
-      // disable the buttons, depending on the polling state
-      document.getElementById("btnStopPolling").disabled  = !restapi.isPolling();
-      document.getElementById("btnSetValue").disabled     = !restapi.isPolling();
-      document.getElementById("btnStartPolling").disabled = restapi.isPolling();
+      console.debug(`LP_StateChange: '${restapi.getPollState()}'`);
 
-      document.getElementById("pollActive").innerHTML     = restapi.isPolling() ? "True" : "False";
-      document.getElementById("pollAborted").innerHTML    = restapi.getPollAborted() ? "True" : "False";
-      document.getElementById("pollState").innerHTML      = restapi.getPollStateString();
+      // disable the buttons, depending on the polling state
+      document.getElementById("btnStopPolling").disabled  = restapi.offline() || restapi.paused();
+      document.getElementById("btnStartPolling").disabled = restapi.polling() || restapi.expectRetry();
+      document.getElementById("btnToggleVal").disabled     = !restapi.polling();
+
+      document.getElementById("pollActive").innerHTML     = restapi.polling() ? "True" : "False";
+      document.getElementById("pollPaused").innerHTML    = restapi.paused() ? "True" : "False";
+      document.getElementById("pollState").innerHTML      = restapi.getPollState();
     }
 
     /*
       Thrown if long polling time has elapsed without receiving a message.
       This event may be useful if a sign of life is desired.
     */
-    function LP_EmptyPoll(ts) {
-      showRAstates();
-      // shows the current date and time
-      document.getElementById("pollevent").textContent = ts2datetime(ts);
+    function LP_EmptyPoll() {
+      // shows ts as date and time in the 'last empty poll' field
+      document.getElementById("pollevent").textContent = ts2datetime(new Date().getTime());
     }
 
     /*
@@ -174,7 +171,6 @@
       The parameter is the error object.
     */
     function LP_Error(error) {
-      showRAstates();
       // shows the error instead of the last received message
       document.getElementById("payload").style.backgroundColor = 'lightsalmon';
       document.getElementById("payload").textContent = error?.toString()
@@ -189,7 +185,7 @@
         this connection is automatically activated again after some time, so that it makes sense to retry
         starting polling after a few seconds.
       */
-      // return 10; // next attempt to restart polling in 10 seconds
+      return 8; // next attempt to restart polling in 3 seconds, or no retry
     }
 
     /*
@@ -208,23 +204,19 @@
       "iddata"  is the object you gave to the subscribe function.
     */
     function LP_Message(payload) {
-      showRAstates();
       document.getElementById("payload").style.backgroundColor = 'lightcyan';
       document.getElementById("payload").innerHTML = JSON.stringify(
         payload,
         (_key, value) => {
           switch (_key) {
-            case "elem":  return `{[NODE]:{id:${value.id}}}`;
-            case "id":    return span(value, 'payload-id');
-            case "val":   return span(value, 'payload-val');
-            case "ts":
-            case "lc":    return `${value}(${ts2datetime(value, false)})`;
+            case "elem":  return `{[NODE]:{id:${value.id}}}`;   // Otherwise {} would be displayed
+            case "id":    return span(value, 'payload-id');     // emphasize values
+            case "val":   return span(value, 'payload-val');    //    "
+            case "ts":    // append the time in human readable text
+            case "lc":    return `${value}(${ts2datetime(value)})`;
             default:      return value;
           }
       });
-
-      if (payload?.state?.ts)
-        document.getElementById("pollevent").textContent = ts2datetime(payload.state.ts);
 
       if (payload?.iddata?.elem != undefined)
         payload.iddata.elem.textContent = payload.state.val
