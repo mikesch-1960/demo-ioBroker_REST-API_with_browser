@@ -33,7 +33,7 @@ class C_RestApi {
     // describing the current state of the polling
   #pollstate           = -1;  // default value must be different from the possible states!
 
-  pollStates = Object.freeze({
+  #enumStates = Object.freeze({
     polling:      1,
     paused:       2,
     offline:      3,
@@ -62,7 +62,7 @@ class C_RestApi {
     this.#firstPoll   = true;
 
     this.#setTOid && clearTimeout(this.#setTOid);
-    this.#setPollstate(this.pollStates.offline);
+    this.#setPollstate(this.#enumStates.offline);
 
     this.#lngPoll();
   }
@@ -72,7 +72,7 @@ class C_RestApi {
     this.#setTOid && clearTimeout(this.#setTOid);
     // this.#subscriptions stay defined for resubscribe them when restart the polling
     this.#abortCtrl.abort();
-    this.#setPollstate(this.pollStates.paused);
+    this.#setPollstate(this.#enumStates.paused);
   }
 
   /*
@@ -173,23 +173,23 @@ class C_RestApi {
   // }
 
   polling() {
-    return this.#pollstate === this.pollStates.polling;
+    return this.#pollstate === this.#enumStates.polling;
   }
 
   paused() {
-    return this.#pollstate === this.pollStates.paused;
+    return this.#pollstate === this.#enumStates.paused;
   }
 
   offline() {
-    return this.#pollstate === this.pollStates.offline;
+    return this.#pollstate === this.#enumStates.offline;
   }
 
   expectRetry() {
-    return this.#pollstate === this.pollStates.expectRetry;
+    return this.#pollstate === this.#enumStates.expectRetry;
   }
 
   getPollState() {
-    return Object.keys(this.pollStates)[Object.values(this.pollStates).indexOf(this.#pollstate)];
+    return Object.keys(this.#enumStates)[Object.values(this.#enumStates).indexOf(this.#pollstate)];
   }
 
   getSubscriptionData(id) {
@@ -284,7 +284,7 @@ class C_RestApi {
 
       if (data === '_') { // seems to mean that initializing polling was successful
         // console.debug(`REST-API: Connect first time response. first=${this.#firstPoll}`)
-        this.#setPollstate(this.pollStates.polling);
+        this.#setPollstate(this.#enumStates.polling);
         this.#resubscribeAll();
         this.#firstPoll = false;
       } else
@@ -318,7 +318,7 @@ class C_RestApi {
       // Handle abort error
       if (error?.name === 'AbortError') {
         console.warn(`REST-API: long polling aborted!`)
-        this.#setPollstate(this.pollStates.paused);
+        this.#setPollstate(this.#enumStates.paused);
       } else {
         // Handle other errors
         console.error('REST-API: ', error?.toString());
@@ -348,12 +348,12 @@ class C_RestApi {
 
         if (retryTime === 0) {   // stop polling until reconnect the next call to restapi.StartPolling()
           console.info(`REST-API: polling is stopped...`);
-          this.#setPollstate(this.pollStates.offline);
+          this.#setPollstate(this.#enumStates.offline);
         }
         else {
           console.info(`REST-API: Try to restart polling after ${retryTime} seconds...`);
           this.#setTOid = setTimeout(() => { this.startPolling() }, retryTime*1000);  // wait and then try to long poll again
-          this.#setPollstate(this.pollStates.expectRetry, retryTime);
+          this.#setPollstate(this.#enumStates.expectRetry, retryTime);
         }
       }   // if (not aborted)
     }); // catch(error)
